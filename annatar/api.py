@@ -17,7 +17,7 @@ from annatar.debrid.providers import DebridService
 from annatar.jackett_models import Indexer, SearchQuery
 from annatar.meta.cinemeta import MediaInfo, get_media_info
 from annatar.stremio import Stream, StreamResponse
-from annatar.torrent import Torrent
+from annatar.torrent import TorrentMeta
 
 log = structlog.get_logger(__name__)
 
@@ -74,7 +74,7 @@ async def _search(
         max_results=max_results,
     ):
         total_processed += 1
-        resolution: str = Torrent.parse_title(link.name).resolution
+        resolution: str = TorrentMeta.parse_title(link.name).resolution
 
         if len(resolution_links[resolution]) >= math.ceil(max_results / 2):
             log.debug("max results for resolution", resolution=resolution)
@@ -97,7 +97,7 @@ async def _search(
 
     streams: list[Stream] = []
     for link in sorted_links:
-        meta: Torrent = Torrent.parse_title(link.name)
+        meta: TorrentMeta = TorrentMeta.parse_title(link.name)
         torrent_name_parts: list[str] = [f"{meta.title}"]
         if type == "series":
             torrent_name_parts.append(

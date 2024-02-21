@@ -2,7 +2,7 @@ import json
 
 from pydantic import BaseModel
 
-from annatar.torrent import Torrent
+from annatar.torrent import TorrentMeta
 
 
 class SearchQuery(BaseModel):
@@ -33,7 +33,7 @@ def test_sorting_series_by_score_names():
 
     results = sorted(
         torrents,
-        key=lambda t: Torrent.parse_title(title=t).score_with(
+        key=lambda t: TorrentMeta.parse_title(title=t).score_with(
             title=search_query.name,
             year=search_query.year,
             season=search_query.season,
@@ -47,11 +47,11 @@ def test_sorting_series_by_score_names():
 
 
 def test_score_series():
-    result = Torrent.parse_title(title="Friends S01-S10").score_series(season=5, episode=10)
+    result = TorrentMeta.parse_title(title="Friends S01-S10").score_series(season=5, episode=10)
     assert result == 3
-    result = Torrent.parse_title(title="Friends S04-E10").score_series(season=5, episode=10)
+    result = TorrentMeta.parse_title(title="Friends S04-E10").score_series(season=5, episode=10)
     assert result == -100
-    result = Torrent.parse_title(title="Friends S05").score_series(season=5, episode=10)
+    result = TorrentMeta.parse_title(title="Friends S05").score_series(season=5, episode=10)
     assert result == 2
-    result = Torrent.parse_title(title="Friends S05-E10").score_series(season=5, episode=10)
+    result = TorrentMeta.parse_title(title="Friends S05-E10").score_series(season=5, episode=10)
     assert result == 1

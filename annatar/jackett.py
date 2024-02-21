@@ -23,7 +23,7 @@ from annatar.jackett_models import (
     SearchResult,
     SearchResults,
 )
-from annatar.torrent import Torrent
+from annatar.torrent import Torrent, TorrentMeta
 
 log = structlog.get_logger(__name__)
 
@@ -316,9 +316,9 @@ async def map_matched_results(
         )
         return
 
-    torrent: Torrent = Torrent.parse_title(title=result.Title)
+    meta: TorrentMeta = TorrentMeta.parse_title(title=result.Title)
 
-    match_score: int = torrent.score_with(
+    match_score: int = meta.score_with(
         title=search_query.name,
         year=search_query.year,
         season=int(search_query.season) if search_query.season else 0,
@@ -348,8 +348,8 @@ async def map_matched_results(
     )
 
     if info_hash:
-        torrent.info_hash = info_hash
-        log.debug("torrent scored well", title=result.Title, match_score=match_score)
+        torrent: Torrent = meta.to_torrent(info_hash=info_hash)
+        log.debug("torrent scored well", title=meta.raw_title, score=match_score)
         await queue.put(ScoredTorrent(torrent=torrent, score=match_score))
 
 

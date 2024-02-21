@@ -38,9 +38,8 @@ def get_resolution(score: int) -> str:
     return "Unknown"
 
 
-class Torrent(BaseModel):
+class TorrentMeta(BaseModel):
     title: str
-    info_hash: str = ""
     episode: list[int] = []
     episodeName: str = ""
     season: list[int] = []
@@ -68,11 +67,14 @@ class Torrent(BaseModel):
             return [v]
         return v
 
+    def to_torrent(self, info_hash: str) -> "Torrent":
+        return Torrent(**self.model_dump(), info_hash=info_hash)
+
     @staticmethod
-    def parse_title(title: str) -> "Torrent":
+    def parse_title(title: str) -> "TorrentMeta":
         meta: dict[Any, Any] = PTN.parse(title, standardise=True)
         meta["raw_title"] = title
-        return Torrent(**meta)
+        return TorrentMeta(**meta)
 
     @property
     def audio_channels(self) -> str:
@@ -140,6 +142,10 @@ class Torrent(BaseModel):
         year_match_score = (1 if self.year and self.year == year else 0) << YEAR_MATCH_BIT_POS
         result: int = season_match_score | resolution_score | audio_score | year_match_score
         return result
+
+
+class Torrent(TorrentMeta, BaseModel):
+    info_hash: str
 
 
 def max_score_for(resolution: str) -> int:
