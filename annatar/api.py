@@ -9,7 +9,7 @@ import structlog
 from prometheus_client import Counter, Histogram
 
 from annatar import human, instrumentation
-from annatar.database import db
+from annatar.database import db, odm
 from annatar.debrid.models import StreamLink
 from annatar.debrid.providers import DebridService
 from annatar.indexers import Category, Indexer, parallel
@@ -33,6 +33,8 @@ async def _search(
     imdb_id: str,
     season_episode: list[int] = [],
     indexers: list[Indexer] = [],
+    season: int | None = None,
+    episode: int | None = None,
 ) -> StreamResponse:
     if await db.unique_add("stream_request", f"{imdb_id}:{season_episode}"):
         log.debug("unique search")
@@ -46,26 +48,70 @@ async def _search(
 
     torrent_queue: asyncio.Queue[Torrent] = asyncio.Queue(maxsize=5)
     cancel: asyncio.Event = asyncio.Event()
-    asyncio.create_task(
-        parallel.search(
-            imdb=imdb_id,
-            category=category,
-            indexers=indexers,
-            queue=torrent_queue,
-            cancel=cancel,
+    tasks: list[asyncio.Task] = []
+    tasks.append(
+        asyncio.create_task(
+            parallel.search(
+                imdb=imdb_id,
+                category=category,
+                indexers=indexers,
+                queue=torrent_queue,
+                cancel=cancel,
+            )
         )
     )
 
-    gather_tasks = [
-        gather_stream_links(
-            debrid=debrid,
-            queue=torrent_queue,
-            cancel=cancel,
-            max_results=max_results / 3,
+    results_queue: asyncio.Queue[StreamLink] = asyncio.Queue(maxsize=10)
+    for _ in range(5):
+        tasks.append(
+            asyncio.create_task(
+                gather_stream_links(
+                    debrid=debrid,
+                    queue=torrent_queue,
+                    results_queue=results_queue,
+                )
+            )
         )
-        for _ in range(5)
-    ]
 
+    resolution_links: dict[str, list[StreamLink]] = defaultdict(list)
+    total_links: int = 0
+    while total_links < max_results:
+        try:
+            link: StreamLink = await asyncio.wait_for(results_queue.get(), timeout=5)
+            if len(resolution_links[link.torrent.resolution]) < max_results / 3:
+                resolution_links[link.torrent.resolution].append(link)
+                total_links += 1
+            results_queue.task_done()
+        except asyncio.TimeoutError:
+            log.debug(
+                "timeout waiting for stream links",
+                imdb_id=imdb_id,
+                category=category,
+                timeout=5,
+            )
+            break
+
+    log.debug(
+        "found enough stream links. Cancelling tasks",
+        imdb_id=imdb_id,
+        category=category,
+        found=total_links,
+    )
+    all(t.cancel() for t in tasks if not t.done())
+
+    sorted_links: list[StreamLink] = sorted(
+        list(chain(*resolution_links.values())),
+        key=lambda link: human.rank_quality(link.torrent.resolution),
+    )
+
+    streams: list[Stream] = await format_stream_links(stream_links=sorted_links, debrid=debrid)
+
+    return StreamResponse(streams=streams)
+
+
+async def format_stream_links(
+    stream_links: list[StreamLink], debrid: DebridService
+) -> list[Stream]:
     streams: list[Stream] = []
     for link in stream_links:
         meta: TorrentMeta = TorrentMeta.parse_title(link.name)
@@ -107,34 +153,32 @@ async def _search(
                 name=name.strip(),
             )
         )
-
-    return StreamResponse(streams=streams)
+    return streams
 
 
 async def gather_stream_links(
     debrid: DebridService,
     queue: asyncio.Queue[Torrent],
-    max_results: int,
+    results_queue: asyncio.Queue[StreamLink],
     season: int | None = None,
     episode: int | None = None,
-) -> list[StreamLink]:
-    stream_links: list[StreamLink] = []
-    while len(stream_links) < max_results:
-        try:
-            torrent: Torrent = await asyncio.wait_for(queue.get(), timeout=5)
-        except asyncio.TimeoutError:
-            break
-        if not torrent:
-            break
-        link: StreamLink | None = await debrid.get_stream_link(
-            info_hash=torrent.info_hash,
-            season=season,
-            episode=episode,
-        )
-        stream_links.extend(links)
-        if len(stream_links) >= max_results:
-            break
-    return stream_links
+):
+    try:
+        while True:
+            torrent: Torrent = await queue.get()
+            if not torrent:
+                break
+            link: StreamLink | None = await debrid.get_stream_link(
+                info_hash=torrent.info_hash,
+                season=season,
+                episode=episode,
+            )
+            if link:
+                await results_queue.put(link)
+    except asyncio.TimeoutError:
+        return
+    except asyncio.CancelledError:
+        return
 
 
 def arrange_into_rows(strings: list[str], rows: int) -> str:
@@ -184,18 +228,20 @@ async def search(
     max_results: int,
     debrid: DebridService,
     imdb_id: str,
-    season_episode: list[int] = [],
-    indexers: list[str] = [],
+    indexers: list[Indexer],
+    season: int | None = None,
+    episode: int | None = None,
 ) -> StreamResponse:
     start_time = datetime.now()
     res: Optional[StreamResponse] = None
     try:
         res = await _search(
-            type=type,
+            category=Category.get_by_name(type),
             max_results=max_results,
             debrid=debrid,
             imdb_id=imdb_id,
-            season_episode=season_episode,
+            season=season,
+            episode=episode,
             indexers=indexers,
         )
         return res
@@ -210,10 +256,4 @@ async def search(
             debrid_service=debrid.id(),
             cached=res.cached if res else False,
             error=True if res and res.error else False,
-        ).observe(
-            secs,
-            exemplar={
-                "imdb": imdb_id,
-                "season_episode": ",".join([str(i) for i in season_episode]),
-            },
-        )
+        ).observe(secs)
