@@ -9,6 +9,7 @@ variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   DOCKER_PUSH: --push
+  BUILDKIT_INLINE_CACHE: 1
 
 services:
   - name: docker:dind
