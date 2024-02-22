@@ -1,12 +1,12 @@
 import asyncio
 from datetime import timedelta
 from hashlib import sha256
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 import structlog
 
 from annatar import human
-from annatar.database import db
+from annatar.database import db, odm
 from annatar.debrid import real_debrid_api as api
 from annatar.debrid.models import StreamLink
 from annatar.debrid.rd_models import (
@@ -25,7 +25,8 @@ log = structlog.get_logger(__name__)
 
 async def find_streamable_file_id(
     files: list[TorrentFile],
-    season_episode: list[int],
+    season: int | None = None,
+    episode: int | None = None,
 ) -> int | None:
     if len(files) == 0:
         log.debug("No files, returning 0")
@@ -37,22 +38,26 @@ async def find_streamable_file_id(
         return None
 
     sorted_files: list[TorrentFile] = sorted(video_files, key=lambda f: f.bytes, reverse=True)
-    if not season_episode:
+    if not season or not episode:
         log.debug("returning biggest file", file=sorted_files[0])
-        return sorted_files[0].id if human.is_video(sorted_files[0].path) else None
+        return sorted_files[0].id
 
     for file in sorted_files:
         path = file.path.lower()
-        if human.match_season_episode(season_episode=season_episode, file=path):
+        if human.match_season_episode(season=season, episode=episode, file=path):
             if not human.is_video(path):
                 continue
             log.info(
-                "found matched file for season/episode", file=file, season_episode=season_episode
+                "found matched file for season/episode",
+                file=file,
+                season=season,
+                episode=episode,
             )
             return file.id
     log.info(
         "No file found for season/episode",
-        season_episode=season_episode,
+        season=season,
+        episode=episode,
     )
     return None
 
@@ -98,11 +103,7 @@ async def _get_stream_for_torrent(
     file_id: int,
     debrid_token: str,
 ) -> Optional[UnrestrictedLink]:
-
-    file_set: InstantFileSet | None = await db.get_model(
-        key=f"rd:instant_file_set:torrent:{info_hash.upper()}",
-        model=InstantFileSet,
-    )
+    file_set: InstantFileSet | None = await odm.RDInstantFileSets.get(info_hash)
 
     if not file_set:
         log.error("cached torrent not found", info_hash=info_hash)
@@ -163,11 +164,13 @@ async def get_stream_for_torrent(
     """
     Get the stream link for a torrent and file.
     """
-    key_hash: str = sha256(debrid_token.encode()).hexdigest()
-    cache_key: str = f"rd:torrent:{info_hash}:{key_hash}:{file_id}"
-    cached_stream: Optional[StreamLink] = await db.get_model(cache_key, model=StreamLink)
+    unique_key: str = f"{sha256(debrid_token.encode()).hexdigest()}:{file_id}"
+    cached_stream: Optional[StreamLink] = await odm.StreamLinks.get(
+        provider_short_name="rd",
+        info_hash=info_hash,
+        unique_key=unique_key,
+    )
     if cached_stream:
-        log.info("Cached stream found", stream=cached_stream)
         return cached_stream
 
     unrestricted_link: Optional[UnrestrictedLink] = await _get_stream_for_torrent(
@@ -184,96 +187,71 @@ async def get_stream_for_torrent(
         name=unrestricted_link.filename,
         url=unrestricted_link.download,
     )
-    await db.set_model(cache_key, sl, ttl=timedelta(hours=4))
+    await odm.StreamLinks.set("rd", info_hash, unique_key, timedelta(hours=4), sl)
     return sl
 
 
 async def get_stream_link(
     info_hash: str,
     debrid_token: str,
-    season_episode: list[int] = [],
+    season: int | None = None,
+    episode: int | None = None,
 ) -> StreamLink | None:
-    async for cached_files in api.get_instant_availability(
-        info_hash,
-        debrid_token,
-    ):
-        if not cached_files:
-            continue
+    cache_check_key: str = f"rd:instantAvailability:{info_hash.upper()}"
+    if "1" == await db.get(cache_check_key):
+        log.debug("torrent is is not instantly available", info_hash=info_hash)
+        raise StopAsyncIteration
 
-        torrent_files: list[TorrentFile] = [
-            TorrentFile(
-                id=f.id,
-                path=f.filename,
-                bytes=f.filesize,
-            )
-            for f in cached_files
-        ]
-        file_id: int | None = await find_streamable_file_id(
-            files=torrent_files,
-            season_episode=season_episode,
-        )
+    found: bool = False
+    try:
+        async for cached_files in api.get_instant_availability(
+            info_hash,
+            debrid_token,
+        ):
+            if not cached_files:
+                continue
 
-        if not file_id:
-            log.debug("set does not contain a suitable file")
-            continue
-
-        file: InstantFile | None = next((f for f in cached_files if f.id == file_id), None)
-        if not file:
-            log.error(
-                "cached file set does not contain the desired file_id. This should not be possible",
-                torrent=info_hash,
-                file_id=file_id,
-            )
-            return
-
-        log.debug("found matching instantAvailable set")
-        # this route has to match the route provided to provide the 302
-        url: str = f"/rd/{debrid_token}/{info_hash}/{file_id}"
-
-        await db.set_model(
-            key=f"rd:instant_file_set:torrent:{info_hash.upper()}",
-            model=InstantFileSet(info_hash=info_hash, file_ids=[f.id for f in cached_files]),
-            ttl=timedelta(hours=8),
-        )
-
-        return StreamLink(
-            size=file.filesize,
-            name=file.filename,
-            url=url,
-        )
-
-
-async def get_stream_links(
-    torrents: list[str],
-    debrid_token: str,
-    stop: asyncio.Event,
-    max_results: int,
-    season_episode: list[int] = [],
-) -> AsyncGenerator[StreamLink, None]:
-    """
-    Generates a list of RD links for each torrent link.
-    """
-    links: dict[str, bool] = {}
-    concurrency = max_results * 3
-    grouped = [torrents[i : i + concurrency] for i in range(0, len(torrents), concurrency)]
-
-    for group in grouped:
-        if stop.is_set():
-            return
-        tasks = [
-            asyncio.create_task(
-                get_stream_link(
-                    info_hash=info_hash,
-                    season_episode=season_episode,
-                    debrid_token=debrid_token,
+            torrent_files: list[TorrentFile] = [
+                TorrentFile(
+                    id=f.id,
+                    path=f.filename,
+                    bytes=f.filesize,
                 )
+                for f in cached_files
+            ]
+            file_id: int | None = await find_streamable_file_id(
+                files=torrent_files, season=season, episode=episode
             )
-            for info_hash in group
-        ]
 
-        for task in asyncio.as_completed(tasks):
-            link = await task
-            if link:
-                yield link
-            if stop.is_set():
+            if not file_id:
+                log.debug("set does not contain a suitable file")
+                continue
+
+            file: InstantFile | None = next((f for f in cached_files if f.id == file_id), None)
+            if not file:
+                log.error(
+                    "cached file set does not contain the desired file_id. This should not be possible",
+                    torrent=info_hash,
+                    file_id=file_id,
+                )
                 return
+
+            log.debug("found matching instantAvailable set")
+
+            # this route has to match the route provided to provide the 302
+            url: str = f"/rd/{debrid_token}/{info_hash}/{file_id}"
+
+            found = True
+            await odm.RDInstantFileSets.put(
+                info_hash=info_hash,
+                ifs=InstantFileSet(info_hash=info_hash, file_ids=[f.id for f in cached_files]),
+                ttl=timedelta(hours=8),
+            )
+
+            return StreamLink(
+                size=file.filesize,
+                name=file.filename,
+                url=url,
+            )
+    finally:
+        await db.set(cache_check_key, str(int(found)), timedelta(days=1))

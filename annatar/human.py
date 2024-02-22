@@ -1,9 +1,6 @@
 import re
 
 import structlog
-from pydantic import BaseModel
-
-from annatar.jackett_models import SearchQuery
 
 log = structlog.get_logger(__name__)
 
@@ -74,14 +71,14 @@ def match_episode(episode: int, file: str) -> bool:
 
 
 def find_episode(file: str) -> int | None:
-    match = re.search(rf"[^A-Z]E(\d\d?)\b", file, re.IGNORECASE)
+    match = re.search(r"[^A-Z]E(\d\d?)\b", file, re.IGNORECASE)
     if match:
         return int(match.group(1))
 
 
-def match_season_episode(season_episode: list[int], file: str) -> bool:
-    matches_season = match_season(season_episode[0], file)
-    matches_episode = match_episode(season_episode[1], file)
+def match_season_episode(season: int, episode: int, file: str) -> bool:
+    matches_season = match_season(season, file)
+    matches_episode = match_episode(season, file)
 
     log.debug(
         "pattern match result",

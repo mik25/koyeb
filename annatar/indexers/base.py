@@ -21,11 +21,11 @@ class Category(int, Enum):
         return self.name.lower()
 
     @staticmethod
-    def get_by_name(name: str) -> Optional["Category"]:
+    def get_by_name(name: str) -> "Category":
         for cat in Category:
             if cat == name:
                 return cat
-        return None
+        raise ValueError(f"Unknown category {name}")
 
 
 class Indexer(BaseModel, ABC):

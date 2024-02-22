@@ -3,37 +3,12 @@ from typing import Optional
 
 import aiohttp
 import structlog
-from pydantic import BaseModel
 
-from annatar.database import db
+from annatar.database import odm
 from annatar.instrumentation import HTTP_CLIENT_REQUEST_DURATION
+from annatar.meta.cinemeta_models import MediaInfo
 
 log = structlog.get_logger(__name__)
-
-
-class MediaInfo(BaseModel):
-    id: str
-    type: str
-    name: str
-
-    genres: Optional[list[str]] = None
-    director: Optional[list[str]] = None
-    cast: Optional[list[str]] = None
-    poster: Optional[str] = None
-    posterShape: Optional[str] = None
-    background: Optional[str] = None
-    logo: Optional[str] = None
-    description: Optional[str] = None
-    # A.k.a. year, e.g. "2000" for movies and "2000-2014" or "2000-" for TV shows
-    releaseInfo: Optional[str] = ""
-    imdbRating: Optional[str] = None
-    # ISO 8601, e.g. "2010-12-06T05:00:00.000Z"
-    released: Optional[str] = None
-    runtime: Optional[str] = None
-    language: Optional[str] = None
-    country: Optional[str] = None
-    awards: Optional[str] = None
-    website: Optional[str] = None
 
 
 async def _get_media_info(id: str, type: str) -> MediaInfo | None:
@@ -77,9 +52,7 @@ async def _get_media_info(id: str, type: str) -> MediaInfo | None:
 
 
 async def get_media_info(id: str, type: str) -> Optional[MediaInfo]:
-    cache_key = f"cinemeta:{type}:{id}"
-
-    cached_result: Optional[MediaInfo] = await db.get_model(cache_key, model=MediaInfo)
+    cached_result: Optional[MediaInfo] = await odm.get_media_info(type=type, imdb_id=id)
     if cached_result:
         return cached_result
 
@@ -87,9 +60,4 @@ async def get_media_info(id: str, type: str) -> Optional[MediaInfo]:
     if res is None:
         return None
 
-    await db.set(
-        cache_key,
-        res.model_dump_json(),
-        ttl=timedelta(days=30),
-    )
-    return res
+    await odm.put_media_info(imdb_id=id, info=res, ttl=timedelta(days=30))

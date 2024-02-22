@@ -1,23 +1,21 @@
 import asyncio
 import math
-import re
 from collections import defaultdict
-from datetime import datetime, timedelta
-from hashlib import md5
+from datetime import datetime
 from itertools import chain
 from typing import Optional
 
 import structlog
 from prometheus_client import Counter, Histogram
 
-from annatar import human, instrumentation, jackett
+from annatar import human, instrumentation
 from annatar.database import db
 from annatar.debrid.models import StreamLink
 from annatar.debrid.providers import DebridService
-from annatar.jackett_models import Indexer, SearchQuery
+from annatar.indexers import Category, Indexer, parallel
 from annatar.meta.cinemeta import MediaInfo, get_media_info
 from annatar.stremio import Stream, StreamResponse
-from annatar.torrent import TorrentMeta
+from annatar.torrent import Torrent, TorrentMeta
 
 log = structlog.get_logger(__name__)
 
@@ -29,74 +27,47 @@ UNIQUE_SEARCHES: Counter = Counter(
 
 
 async def _search(
-    type: str,
+    category: Category,
     max_results: int,
     debrid: DebridService,
     imdb_id: str,
     season_episode: list[int] = [],
-    indexers: list[str] = [],
+    indexers: list[Indexer] = [],
 ) -> StreamResponse:
     if await db.unique_add("stream_request", f"{imdb_id}:{season_episode}"):
         log.debug("unique search")
         UNIQUE_SEARCHES.inc()
 
-    media_info: Optional[MediaInfo] = await get_media_info(id=imdb_id, type=type)
+    media_info: Optional[MediaInfo] = await get_media_info(id=imdb_id, type=category.name)
     if not media_info:
         log.error("error getting media info", type=type, id=imdb_id)
         return StreamResponse(streams=[], error="Error getting media info")
     log.info("found media info", type=type, id=id, media_info=media_info.model_dump())
 
-    q = SearchQuery(
-        imdb_id=imdb_id,
-        name=media_info.name,
-        type=type,
-        year=int(re.split(r"\D", (media_info.releaseInfo or ""))[0]),
-    )
-
-    if type == "series" and len(season_episode) == 2:
-        q.season = str(season_episode[0])
-        q.episode = str(season_episode[1])
-
-    found_indexers: list[Indexer | None] = [Indexer.find_by_id(i) for i in indexers]
-    torrents = await jackett.search_indexers(
-        search_query=q,
-        indexers=[i for i in found_indexers if i and i.supports(type)],
-    )
-
-    resolution_links: dict[str, list[StreamLink]] = defaultdict(list)
-    total_links: int = 0
-    total_processed: int = 0
-    stop = asyncio.Event()
-    async for link in debrid.get_stream_links(
-        torrents=torrents,
-        season_episode=season_episode,
-        stop=stop,
-        max_results=max_results,
-    ):
-        total_processed += 1
-        resolution: str = TorrentMeta.parse_title(link.name).resolution
-
-        if len(resolution_links[resolution]) >= math.ceil(max_results / 2):
-            log.debug("max results for resolution", resolution=resolution)
-            continue
-
-        resolution_links[resolution].append(link)
-        total_links += 1
-        if total_links >= max_results:
-            log.debug("max results total")
-            break
-
-    log.debug("found stream links", links=total_links, torrents=total_processed)
-    sorted_links: list[StreamLink] = list(
-        sorted(
-            chain(*resolution_links.values()),
-            key=lambda x: human.rank_quality(x.name),
-            reverse=True,
+    torrent_queue: asyncio.Queue[Torrent] = asyncio.Queue(maxsize=5)
+    cancel: asyncio.Event = asyncio.Event()
+    asyncio.create_task(
+        parallel.search(
+            imdb=imdb_id,
+            category=category,
+            indexers=indexers,
+            queue=torrent_queue,
+            cancel=cancel,
         )
     )
 
+    gather_tasks = [
+        gather_stream_links(
+            debrid=debrid,
+            queue=torrent_queue,
+            cancel=cancel,
+            max_results=max_results / 3,
+        )
+        for _ in range(5)
+    ]
+
     streams: list[Stream] = []
-    for link in sorted_links:
+    for link in stream_links:
         meta: TorrentMeta = TorrentMeta.parse_title(link.name)
         torrent_name_parts: list[str] = [f"{meta.title}"]
         if type == "series":
@@ -138,6 +109,32 @@ async def _search(
         )
 
     return StreamResponse(streams=streams)
+
+
+async def gather_stream_links(
+    debrid: DebridService,
+    queue: asyncio.Queue[Torrent],
+    max_results: int,
+    season: int | None = None,
+    episode: int | None = None,
+) -> list[StreamLink]:
+    stream_links: list[StreamLink] = []
+    while len(stream_links) < max_results:
+        try:
+            torrent: Torrent = await asyncio.wait_for(queue.get(), timeout=5)
+        except asyncio.TimeoutError:
+            break
+        if not torrent:
+            break
+        link: StreamLink | None = await debrid.get_stream_link(
+            info_hash=torrent.info_hash,
+            season=season,
+            episode=episode,
+        )
+        stream_links.extend(links)
+        if len(stream_links) >= max_results:
+            break
+    return stream_links
 
 
 def arrange_into_rows(strings: list[str], rows: int) -> str:

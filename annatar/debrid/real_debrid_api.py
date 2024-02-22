@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator
 
 import aiohttp
 import structlog
 
 from annatar import instrumentation
+from annatar.database import db
 from annatar.debrid import magnet
 from annatar.debrid.rd_models import InstantFile, TorrentInfo, UnrestrictedLink
 
@@ -76,8 +77,10 @@ async def get_instant_availability(
         debrid_token=debrid_token,
     )
     if res is None:
-        return
+        await db.set(cache_check_key, "1", ttl=timedelta(hours=6))
+        raise StopAsyncIteration
 
+    found = False
     for hash, obj in res.items():
         if hash.lower() != info_hash.lower():
             continue
@@ -87,8 +90,11 @@ async def get_instant_availability(
             cached_files = [
                 InstantFile(id=int(file_id), **file_info) for file_id, file_info in set.items()
             ]
-            log.info("found cached files", count=len(cached_files))
+            log.debug("found cached files", count=len(cached_files))
+            found = True
             yield cached_files
+
+    await db.set(cache_check_key, str(int(found)), ttl=timedelta(hours=6))
 
 
 async def list_torrents(debrid_token: str) -> list[TorrentInfo]:

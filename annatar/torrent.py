@@ -2,8 +2,7 @@ import re
 from typing import Any
 
 import PTN
-import structlog
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 # Space required for values
 # 1 bit:  2 values  (0 to 1) # good for boolean flags like HDR or Year
@@ -123,12 +122,14 @@ class TorrentMeta(BaseModel):
         sanitized_name: str = re.sub(r"\W+", r"\\W+", title)
         return bool(re.search(rf"^{sanitized_name}$", self.title, re.IGNORECASE))
 
-    def score_with(self, title: str, year: int, season: int = 0, episode: int = 0) -> int:
+    def score_with(
+        self, title: str, year: int, season: int | None = None, episode: int | None = None
+    ) -> int:
         if not self.matches_name(title):
             return -1000
 
         season_match_score = (
-            self.score_series(season=season, episode=episode) << SEASON_MATCH_BIT_POS
+            self.score_series(season=season or 0, episode=episode or 0) << SEASON_MATCH_BIT_POS
         )
         if season_match_score < 0:
             return season_match_score
@@ -146,6 +147,14 @@ class TorrentMeta(BaseModel):
 
 class Torrent(TorrentMeta, BaseModel):
     info_hash: str
+
+
+class ScoredTorrent(Torrent, BaseModel):
+    score: int
+
+    @staticmethod
+    def from_torrent(torrent: Torrent, score: int) -> "ScoredTorrent":
+        return ScoredTorrent(**torrent.model_dump(), score=score)
 
 
 def max_score_for(resolution: str) -> int:

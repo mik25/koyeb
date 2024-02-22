@@ -1,5 +1,4 @@
-import asyncio
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 from annatar.debrid import rd
 from annatar.debrid.debrid_service import DebridService
@@ -22,21 +21,18 @@ class RealDebridProvider(DebridService):
     def shared_cache(self):
         return True
 
-    async def get_stream_links(
+    async def get_stream_link(
         self,
-        torrents: list[str],
-        season_episode: list[int],
-        stop: asyncio.Event,
-        max_results: int,
-    ) -> AsyncGenerator[StreamLink, None]:
-        async for sl in rd.get_stream_links(
-            torrents=torrents,
+        info_hash: str,
+        season: int | None = None,
+        episode: int | None = None,
+    ) -> StreamLink | None:
+        return await rd.get_stream_link(
+            info_hash=info_hash,
             debrid_token=self.api_key,
-            season_episode=season_episode,
-            stop=stop,
-            max_results=max_results,
-        ):
-            yield sl
+            season=season,
+            episode=episode,
+        )
 
     async def get_stream_for_torrent(
         self,

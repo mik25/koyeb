@@ -5,9 +5,9 @@ import aiohttp
 import structlog
 from pydantic import BaseModel
 
-from annatar.database import db
+from annatar.database import odm
 from annatar.debrid import magnet
-from annatar.debrid.pm_models import DirectDLResponse
+from annatar.debrid.premiumize_models import DirectDLResponse
 from annatar.instrumentation import HTTP_CLIENT_REQUEST_DURATION
 
 log = structlog.get_logger(__name__)
@@ -68,10 +68,8 @@ async def directdl(
     api_token: str,
     info_hash: str,
 ) -> Optional[DirectDLResponse]:
-    cache_key: str = f"premiumize:directdl:{info_hash}"
-    cached: Optional[str] = await db.get(cache_key)
-    if cached:
-        return DirectDLResponse.model_validate_json(cached)
+    if cached := await odm.DirectDLResponses.get(info_hash):
+        return cached
 
     dl_res: HTTPResponse[DirectDLResponse] = await make_request(
         api_token=api_token,
@@ -89,5 +87,5 @@ async def directdl(
             exc_info=True,
         )
         return None
-    await db.set(key=cache_key, value=dl_res.model.model_dump_json(), ttl=timedelta(hours=24))
+    await odm.DirectDLResponses.put(info_hash=info_hash, dl=dl_res.model, ttl=timedelta(hours=24))
     return dl_res.model

@@ -1,6 +1,3 @@
-import asyncio
-from typing import AsyncGenerator
-
 from annatar.debrid import pm
 from annatar.debrid.debrid_service import DebridService
 from annatar.debrid.models import StreamLink
@@ -22,18 +19,15 @@ class PremiumizeProvider(DebridService):
     def shared_cache(self):
         return False
 
-    async def get_stream_links(
+    async def get_stream_link(
         self,
-        torrents: list[str],
-        season_episode: list[int],
-        stop: asyncio.Event,
-        max_results: int,
-    ) -> AsyncGenerator[StreamLink, None]:
-        async for sl in pm.get_stream_links(
-            torrents=torrents,
+        info_hash: str,
+        season: int | None = None,
+        episode: int | None = None,
+    ) -> StreamLink | None:
+        return await pm.get_stream_link(
+            info_hash=info_hash,
             debrid_token=self.api_key,
-            season_episode=season_episode,
-            stop=stop,
-            max_results=max_results,
-        ):
-            yield sl
+            season=season,
+            episode=episode,
+        )
