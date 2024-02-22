@@ -22,6 +22,7 @@ RELEASE_VERSION ?= $(shell git describe --tags --abbrev=0 | awk -F. '{print $$1 
 # Build and push container for BUILD_ARCH
 container:
 	docker build --platform $(BUILD_ARCH) \
+		--build-arg BUILDKIT_INLINE_CACHE=1 \
 		--build-arg BUILD_VERSION=$(shell git describe --tags) \
 		$(DOCKER_PUSH) \
 		--cache-from=$(DOCKER_TAG_ARCH) \
