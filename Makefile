@@ -36,6 +36,10 @@ docker-manifest:
 	docker manifest create $(DOCKER_TAG) $(foreach arch,$(ARCHS),$(DOCKER_TAG)-$(arch))
 	$(foreach arch,$(ARCHS),docker manifest annotate $(DOCKER_TAG) $(DOCKER_TAG)-$(arch) --arch $(arch) ;)
 	docker manifest push $(DOCKER_TAG)
+	# create latest tag
+	docker manifest create $(IMAGE_NAME):latest $(foreach arch,$(ARCHS),$(IMAGE_NAME)-$(arch):latest)
+	$(foreach arch,$(ARCHS),docker manifest annotate $(IMAGE_NAME):latest $(IMAGE_NAME)-$(arch):latest --arch $(arch) ;)
+	docker manifest push $(IMAGE_NAME):latest
 
 lint:
 	poetry run ruff check annatar
