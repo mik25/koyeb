@@ -25,7 +25,7 @@ log = structlog.get_logger(__name__)
 
 
 JACKETT_URL: str = os.environ.get("JACKETT_URL", "http://195.154.231.70:9117")
-JACKETT_API_KEY: str = os.environ.get("JACKETT_API_KEY", "")
+JACKETT_API_KEY: str = os.environ.get("JACKETT_API_KEY", "ar2u3emdwocp9cqcbyiugot0t17s65yl")
 
 JACKETT_MAX_RESULTS = int(os.environ.get("JACKETT_MAX_RESULTS", 100))
 JACKETT_TIMEOUT = int(os.environ.get("JACKETT_TIMEOUT", 6))
