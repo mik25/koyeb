@@ -20,11 +20,15 @@ async def make_request(
     url: str,
     url_values: None | dict[str, str] = None,
     body: None | dict[str, Any] = None,
+    origin_ip: str | None = None,
 ) -> Any:
     if body is None:
         body = {}
     if url_values is None:
         url_values = {}
+    if origin_ip and method == "POST":
+        # set the origin IP for the user. RD asks for this for tracking purposes
+        body["ip"] = origin_ip
     api_url = f"{ROOT_URL}{url.format(**url_values)}"
     start_time = datetime.now()
     status_code: str = "2xx"
@@ -56,15 +60,16 @@ async def make_request(
         ).observe((datetime.now() - start_time).total_seconds())
 
 
-async def add_magnet(info_hash: str, debrid_token: str) -> str | None:
+async def add_magnet(info_hash: str, debrid_token: str, origin_ip: str | None = None) -> str | None:
     """
     Adds a magnet link to RD and returns the torrent id.
     """
     response_json = await make_request(
-        method="post",
+        method="POST",
         url="/torrents/addMagnet",
         debrid_token=debrid_token,
         body={"magnet": magnet.make_magnet_link(info_hash=info_hash)},
+        origin_ip=origin_ip,
     )
     return response_json["id"] if response_json else None
 
@@ -127,6 +132,7 @@ async def select_torrent_files(
     file_ids: list[int],
     debrid_token: str,
     season_episode: None | list[int] = None,
+    origin_ip: str | None = None,
 ) -> bool:
     if season_episode is None:
         season_episode = []
@@ -136,6 +142,7 @@ async def select_torrent_files(
         url_values={"torrent_id": torrent_id},
         debrid_token=debrid_token,
         body={"files": ",".join(str(f) for f in file_ids)},
+        origin_ip=origin_ip,
     )
     return True
 
@@ -144,12 +151,14 @@ async def unrestrict_link(
     info_hash: str,
     link: str,
     debrid_token: str,
+    origin_ip: str | None = None,
 ) -> UnrestrictedLink | None:
     response_json = await make_request(
         method="POST",
         url="/unrestrict/link",
         debrid_token=debrid_token,
         body={"link": link},
+        origin_ip=origin_ip,
     )
     if not response_json:
         return None
