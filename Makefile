@@ -27,6 +27,8 @@ container:
 		--build-arg BUILD_VERSION=$(BUILD_VERSION) \
 		$(DOCKER_PUSH) \
 		--cache-from=$(DOCKER_TAG_ARCH) \
+		--cache-from=$(DOCKER_TAG):latest \
+		--cache-from=$(IMAGE_NAME):latest \
 		-f $(DOCKERFILE) \
 		-t $(DOCKER_TAG_ARCH) .
 
