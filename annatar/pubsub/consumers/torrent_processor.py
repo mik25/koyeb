@@ -129,7 +129,8 @@ async def map_search_result(result: TorrentSearchResult) -> Torrent | None:
     )
 
     if info_hash:
-        meta: TorrentMeta = TorrentMeta.parse_title(result.title)
+        title_data = {'title': result.title}  # Replace 'title' with the actual key in your data
+        meta: TorrentMeta = TorrentMeta.parse_title(title_data)
         torrent: Torrent = meta.with_info_hash(info_hash)
         return torrent
     log.debug("no info hash found", guid=result.guid, link=result.magnet_link)
@@ -137,12 +138,6 @@ async def map_search_result(result: TorrentSearchResult) -> Torrent | None:
 
 
 async def resolve_magnet_link(guid: str, link: str) -> str | None:
-    """
-    Jackett sometimes does not have a magnet link but a local URL that
-    redirects to a magnet link. This will not work if adding to RD and
-    Jackett is not publicly hosted. Most of the time we can resolve it
-    locally. If not we will just pass it along to RD anyway
-    """
     if link.startswith("magnet"):
         return magnet.parse_magnet_link(link)
     if not link.startswith("http"):
